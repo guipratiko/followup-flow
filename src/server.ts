@@ -1,6 +1,6 @@
+import { env } from './config/env';
 import express, { Router } from 'express';
 import cors from 'cors';
-import { env } from './config/env';
 import healthRoutes from './routes/health';
 import publicStatusRoutes from './routes/publicStatus';
 import sequencesRoutes from './routes/sequences';

@@ -2,6 +2,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+/** Fuso do processo Node (alinhado ao Brasil; override com TZ ou APP_TIMEZONE). */
+if (!process.env.TZ?.trim()) {
+  process.env.TZ = (process.env.APP_TIMEZONE || 'America/Sao_Paulo').trim();
+}
+
 function parseOrigins(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
   return raw
@@ -31,6 +36,12 @@ function normalizeEvolutionBaseUrl(raw: string): string {
 export const env = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: Number(process.env.PORT) || 4337,
+  /** Base URL do backend OnlyFlow (ex.: https://api.onlyflow.com.br) — notificação Socket após espelhar mensagem. */
+  onlyflowApiBaseUrl: (process.env.ONLYFLOW_API_BASE_URL || '').trim().replace(/\/$/, ''),
+  /** Mesmo segredo que FOLLOWUP_MIRROR_NOTIFY_SECRET no .env do backend. */
+  followupMirrorNotifySecret: (process.env.FOLLOWUP_MIRROR_NOTIFY_SECRET || '').trim(),
+  /** Opcional: mesmo REDIS_URI do backend OnlyFlow — invalida cache do chat após espelhar mensagem. */
+  redisUri: (process.env.REDIS_URI || '').trim(),
   postgresUri: (process.env.POSTGRES_URI || '').trim(),
   jwtSecret: (process.env.JWT_SECRET || '').trim(),
   evolutionBaseUrl: normalizeEvolutionBaseUrl(process.env.EVOLUTION_API_BASE_URL || ''),
