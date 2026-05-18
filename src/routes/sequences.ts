@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { getPool } from '../db/pool';
 import { FollowupAuthRequest, jwtAuth } from '../middleware/jwtAuth';
+import { parseFollowupRecurrence } from '../services/recurrence';
 
 const router = Router();
 router.use(jwtAuth);
@@ -146,6 +147,8 @@ router.post('/sequences', async (req: FollowupAuthRequest, res: Response) => {
       instanceName?: string;
       instanceIntegration?: string | null;
       contactName?: string;
+      recurrence?: string;
+      recurrenceMaxCycles?: number | null;
       steps?: Array<{ messageType: string; payload?: Record<string, unknown>; scheduledAt: string }>;
     };
     if (!body.contactId || !body.instanceId || !body.remoteJid || !body.instanceName) {
@@ -166,6 +169,34 @@ router.post('/sequences', async (req: FollowupAuthRequest, res: Response) => {
     if (body.steps.length > 30) {
       res.status(400).json({ status: 'error', message: 'Máximo de 30 etapas.' });
       return;
+    }
+
+    const recurrence = parseFollowupRecurrence(body.recurrence);
+    if (!recurrence) {
+      res.status(400).json({
+        status: 'error',
+        message: 'recurrence deve ser none, daily, weekly ou monthly.',
+      });
+      return;
+    }
+
+    let recurrenceMaxCycles: number | null = null;
+    if (
+      body.recurrenceMaxCycles != null &&
+      String(body.recurrenceMaxCycles).trim() !== ''
+    ) {
+      const n = Number(body.recurrenceMaxCycles);
+      if (!Number.isInteger(n) || n < 1) {
+        res.status(400).json({
+          status: 'error',
+          message: 'recurrenceMaxCycles deve ser um inteiro >= 1 ou omitido.',
+        });
+        return;
+      }
+      recurrenceMaxCycles = n;
+    }
+    if (recurrence === 'none') {
+      recurrenceMaxCycles = null;
     }
 
     for (let i = 0; i < body.steps.length; i++) {
@@ -195,11 +226,26 @@ router.post('/sequences', async (req: FollowupAuthRequest, res: Response) => {
       return;
     }
 
+    const activeSeq = await client.query(
+      `SELECT id FROM crm_followup_sequences
+       WHERE contact_id = $1 AND user_id = $2 AND status IN ('active', 'paused')
+       LIMIT 1`,
+      [body.contactId, tenant]
+    );
+    if (activeSeq.rows.length) {
+      res.status(409).json({
+        status: 'error',
+        message: 'Este contato já possui um follow-up ativo ou pausado. Cancele ou conclua antes de criar outro.',
+      });
+      return;
+    }
+
     await client.query('BEGIN');
     const ins = await client.query(
       `INSERT INTO crm_followup_sequences
-       (user_id, contact_id, instance_id, remote_jid, instance_name, instance_integration, contact_name, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'active')
+       (user_id, contact_id, instance_id, remote_jid, instance_name, instance_integration, contact_name, status,
+        recurrence, recurrence_max_cycles, recurrence_cycles_done, cycle_step_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'active',$8,$9,0,$10)
        RETURNING id`,
       [
         tenant,
@@ -209,6 +255,9 @@ router.post('/sequences', async (req: FollowupAuthRequest, res: Response) => {
         body.instanceName.trim(),
         body.instanceIntegration ?? null,
         (body.contactName || '').trim() || null,
+        recurrence,
+        recurrenceMaxCycles,
+        body.steps.length,
       ]
     );
     const sequenceId = ins.rows[0].id as string;
@@ -223,7 +272,10 @@ router.post('/sequences', async (req: FollowupAuthRequest, res: Response) => {
     }
 
     await client.query('COMMIT');
-    await logEvent(sequenceId, null, 'created', `Etapas: ${body.steps.length}`);
+    await logEvent(sequenceId, null, 'created', `Etapas: ${body.steps.length}`, {
+      recurrence,
+      recurrenceMaxCycles,
+    });
     res.status(201).json({ status: 'success', sequenceId });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

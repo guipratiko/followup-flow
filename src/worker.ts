@@ -7,6 +7,7 @@ import {
   extractMessageId,
 } from './services/evolutionSend';
 import { normalizeEvolutionSendTimestamp } from './utils/whatsappTime';
+import { tryScheduleNextRecurrenceCycle } from './services/recurrence';
 
 const ALLOWED_INTEGRATIONS = new Set<string | null | undefined>([null, undefined, '', 'WHATSAPP-BAILEYS', 'evolution']);
 
@@ -146,13 +147,19 @@ async function maybeCompleteSequence(sequenceId: string): Promise<void> {
     `SELECT COUNT(*)::text AS c FROM crm_followup_steps WHERE sequence_id = $1 AND status IN ('pending','processing')`,
     [sequenceId]
   );
-  if (rows[0]?.c === '0') {
-    await pool.query(
-      `UPDATE crm_followup_sequences SET status = 'completed', updated_at = NOW() WHERE id = $1 AND status = 'active'`,
-      [sequenceId]
-    );
-    await logEvent(sequenceId, null, 'sequence_completed');
+  if (rows[0]?.c !== '0') return;
+
+  const recurred = await tryScheduleNextRecurrenceCycle(pool, sequenceId);
+  if (recurred) {
+    await logEvent(sequenceId, null, 'cycle_recurred', 'Próximo ciclo de follow-up agendado.');
+    return;
   }
+
+  await pool.query(
+    `UPDATE crm_followup_sequences SET status = 'completed', updated_at = NOW() WHERE id = $1 AND status = 'active'`,
+    [sequenceId]
+  );
+  await logEvent(sequenceId, null, 'sequence_completed');
 }
 
 export function startFollowupWorker(): NodeJS.Timeout {
