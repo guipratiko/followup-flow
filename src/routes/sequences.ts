@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { getPool } from '../db/pool';
 import { FollowupAuthRequest, jwtAuth } from '../middleware/jwtAuth';
-import { parseFollowupRecurrence } from '../services/recurrence';
+import { parseFollowupRecurrence, type FollowupRecurrence } from '../services/recurrence';
 
 const router = Router();
 router.use(jwtAuth);
@@ -175,7 +175,7 @@ router.post('/sequences', async (req: FollowupAuthRequest, res: Response) => {
     if (!recurrence) {
       res.status(400).json({
         status: 'error',
-        message: 'recurrence deve ser none, daily, weekly ou monthly.',
+        message: 'recurrence deve ser none, daily, weekly, biweekly ou monthly.',
       });
       return;
     }
@@ -338,6 +338,8 @@ router.put('/sequences/:id', async (req: FollowupAuthRequest, res: Response) => 
     const { id } = req.params;
     const body = req.body as {
       steps?: Array<{ messageType: string; payload?: Record<string, unknown>; scheduledAt: string }>;
+      recurrence?: string;
+      recurrenceMaxCycles?: number | null;
     };
     if (!Array.isArray(body.steps) || body.steps.length === 0) {
       res.status(400).json({ status: 'error', message: 'steps obrigatório.' });
@@ -345,12 +347,50 @@ router.put('/sequences/:id', async (req: FollowupAuthRequest, res: Response) => 
     }
 
     const own = await client.query(
-      `SELECT id FROM crm_followup_sequences WHERE id = $1 AND user_id = $2 AND status IN ('active','paused')`,
+      `SELECT id, recurrence_cycles_done FROM crm_followup_sequences WHERE id = $1 AND user_id = $2 AND status IN ('active','paused')`,
       [id, tenant]
     );
     if (!own.rows.length) {
       res.status(404).json({ status: 'error', message: 'Sequência não encontrada ou não editável.' });
       return;
+    }
+
+    let recurrence: FollowupRecurrence | undefined;
+    let recurrenceMaxCycles: number | null | undefined;
+    if (body.recurrence != null) {
+      const cyclesDone = Number(own.rows[0].recurrence_cycles_done) || 0;
+      if (cyclesDone > 0) {
+        res.status(409).json({
+          status: 'error',
+          message: 'Não é possível alterar a repetição após o primeiro ciclo ter sido concluído.',
+        });
+        return;
+      }
+      const parsed = parseFollowupRecurrence(body.recurrence);
+      if (!parsed) {
+        res.status(400).json({
+          status: 'error',
+          message: 'recurrence deve ser none, daily, weekly, biweekly ou monthly.',
+        });
+        return;
+      }
+      recurrence = parsed;
+      recurrenceMaxCycles = null;
+      if (
+        parsed !== 'none' &&
+        body.recurrenceMaxCycles != null &&
+        String(body.recurrenceMaxCycles).trim() !== ''
+      ) {
+        const n = Number(body.recurrenceMaxCycles);
+        if (!Number.isInteger(n) || n < 1) {
+          res.status(400).json({
+            status: 'error',
+            message: 'recurrenceMaxCycles deve ser um inteiro >= 1 ou omitido.',
+          });
+          return;
+        }
+        recurrenceMaxCycles = n;
+      }
     }
 
     const blk = await client.query(
@@ -393,7 +433,16 @@ router.put('/sequences/:id', async (req: FollowupAuthRequest, res: Response) => 
         [id, i + 1, st.messageType, JSON.stringify(st.payload || {}), new Date(st.scheduledAt).toISOString()]
       );
     }
-    await client.query(`UPDATE crm_followup_sequences SET updated_at = NOW() WHERE id = $1`, [id]);
+    await client.query(
+      `UPDATE crm_followup_sequences SET updated_at = NOW(), cycle_step_count = $2 WHERE id = $1`,
+      [id, body.steps.length]
+    );
+    if (recurrence !== undefined) {
+      await client.query(
+        `UPDATE crm_followup_sequences SET recurrence = $2, recurrence_max_cycles = $3, updated_at = NOW() WHERE id = $1`,
+        [id, recurrence, recurrenceMaxCycles]
+      );
+    }
     await client.query('COMMIT');
     await logEvent(id, null, 'steps_replaced', `${body.steps.length} etapas`);
     res.json({ status: 'success' });

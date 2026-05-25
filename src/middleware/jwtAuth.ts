@@ -23,8 +23,8 @@ export function jwtAuth(req: Request, res: Response, next: NextFunction): void {
     const r = req as FollowupAuthRequest;
     r.jwtUserId = decoded.id;
     const headerEff = (req.headers['x-effective-user-id'] as string | undefined)?.trim();
-    const jwtEff = typeof decoded.effectiveUserId === 'string' ? decoded.effectiveUserId.trim() : '';
-    r.tenantUserId = headerEff || jwtEff || decoded.id;
+    const tokenEff = typeof decoded.effectiveUserId === 'string' ? decoded.effectiveUserId.trim() : '';
+    r.tenantUserId = headerEff || tokenEff || decoded.id;
     next();
   } catch {
     res.status(401).json({ status: 'error', message: 'Token inválido ou expirado.' });

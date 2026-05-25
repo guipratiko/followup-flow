@@ -1,8 +1,8 @@
 import type { Pool, PoolClient } from 'pg';
 
-export type FollowupRecurrence = 'none' | 'daily' | 'weekly' | 'monthly';
+export type FollowupRecurrence = 'none' | 'daily' | 'weekly' | 'biweekly' | 'monthly';
 
-const RECURRENCE_VALUES = new Set<FollowupRecurrence>(['none', 'daily', 'weekly', 'monthly']);
+const RECURRENCE_VALUES = new Set<FollowupRecurrence>(['none', 'daily', 'weekly', 'biweekly', 'monthly']);
 
 export function parseFollowupRecurrence(value: unknown): FollowupRecurrence | null {
   const v = String(value ?? 'none').trim().toLowerCase();
@@ -30,6 +30,9 @@ export function computeNextCycleStart(cycleEnd: Date, recurrence: FollowupRecurr
   }
   if (recurrence === 'weekly') {
     return new Date(cycleEnd.getTime() + 7 * 24 * 60 * 60 * 1000);
+  }
+  if (recurrence === 'biweekly') {
+    return new Date(cycleEnd.getTime() + 15 * 24 * 60 * 60 * 1000);
   }
   if (recurrence === 'monthly') {
     return addOneCalendarMonth(cycleEnd);
